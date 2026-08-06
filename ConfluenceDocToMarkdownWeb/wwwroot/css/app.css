@@ -144,6 +144,11 @@ h2 {
     cursor: pointer;
 }
 
+.drop-zone.dragging {
+    border-color: var(--accent);
+    background: #f8fffb;
+}
+
 .drop-zone input {
     position: absolute;
     inset: 0;

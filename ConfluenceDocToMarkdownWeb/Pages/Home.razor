@@ -27,8 +27,8 @@
                 <p>컨플루언스에서 내려받은 .doc 파일 여러 개를 올린 뒤 변환하세요.</p>
             </div>
 
-            <label class="drop-zone" title="파일 선택 또는 드래그 앤 드롭">
-                <InputFile OnChange="AddFiles" multiple accept=".doc,.mhtml,.html,.htm" />
+            <label class="drop-zone" id="dropZone" title="파일 선택 또는 드래그 앤 드롭">
+                <InputFile id="fileInput" OnChange="AddFiles" multiple accept=".doc,.mhtml,.html,.htm" />
                 <span class="upload-icon" aria-hidden="true">⇪</span>
                 <strong>파일 선택 또는 드래그 앤 드롭</strong>
                 <small>.doc, .mhtml, .html</small>
@@ -103,6 +103,12 @@
     private string Summary => Items.Count == 0
         ? "선택된 파일 없음"
         : $"{Items.Count}개 선택됨, {Items.Count(x => x.Status == FileStatus.Done)}개 변환 완료";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await Js.InvokeVoidAsync("docToMarkdown.enableDropZone", "dropZone", "fileInput");
+    }
 
     private async Task AddFiles(InputFileChangeEventArgs args)
     {
