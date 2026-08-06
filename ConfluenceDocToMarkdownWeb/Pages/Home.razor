@@ -14,11 +14,18 @@
         <header class="topbar">
             <div>
                 <p class="eyebrow">Confluence Export Converter</p>
-                <h1 id="app-title">Confluence DOC to Markdown</h1>
+                <div class="title-row">
+                    <h1 id="app-title">Confluence DOC to Markdown</h1>
+                    <span class="version-pill">v8</span>
+                </div>
             </div>
-            <button class="icon-button" type="button" title="초기화" aria-label="초기화" @onclick="Clear">
-                <span aria-hidden="true">↺</span>
-            </button>
+            <div class="top-actions">
+                <a class="link-button" href="https://github.com/didrnrgus/Confluence_Doc_To_Markdown" target="_blank" rel="noopener noreferrer">소스코드</a>
+                <a class="link-button" href="https://github.com/didrnrgus/Confluence_Doc_To_Markdown/blob/main/README.md" target="_blank" rel="noopener noreferrer">README.md</a>
+                <button class="icon-button" type="button" title="초기화" aria-label="초기화" @onclick="Clear">
+                    <span aria-hidden="true">↺</span>
+                </button>
+            </div>
         </header>
 
         <section class="upload-area" aria-labelledby="upload-title">
