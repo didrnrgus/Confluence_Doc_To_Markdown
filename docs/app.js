@@ -1,17 +1,112 @@
 (function () {
   const fileInput = document.getElementById("fileInput");
   const dropZone = document.getElementById("dropZone");
-  const markdownOutput = document.getElementById("markdownOutput");
-  const copyButton = document.getElementById("copyButton");
-  const downloadButton = document.getElementById("downloadButton");
+  const convertButton = document.getElementById("convertButton");
+  const downloadZipButton = document.getElementById("downloadZipButton");
   const clearButton = document.getElementById("clearButton");
   const statusLabel = document.getElementById("statusLabel");
-  const fileMeta = document.getElementById("fileMeta");
   const noticeBox = document.getElementById("noticeBox");
+  const fileRows = document.getElementById("fileRows");
+  const summaryText = document.getElementById("summaryText");
 
-  let currentFileName = "document.md";
+  let items = [];
 
-  const turndown = () => {
+  function setStatus(text) {
+    statusLabel.textContent = text;
+  }
+
+  function setNotice(text, isWarning) {
+    noticeBox.textContent = text;
+    noticeBox.classList.toggle("warning", Boolean(isWarning));
+  }
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  }
+
+  function markdownFileName(name) {
+    return name.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]+/g, "_") + ".md";
+  }
+
+  function renderRows() {
+    fileRows.innerHTML = "";
+
+    if (!items.length) {
+      fileRows.innerHTML = '<tr class="empty-row"><td colspan="4">파일을 추가하면 여기에 표시됩니다.</td></tr>';
+      summaryText.textContent = "선택된 파일 없음";
+      convertButton.disabled = true;
+      downloadZipButton.disabled = true;
+      return;
+    }
+
+    const completeCount = items.filter((item) => item.status === "done").length;
+    summaryText.textContent = `${items.length}개 선택됨, ${completeCount}개 변환 완료`;
+    convertButton.disabled = false;
+    downloadZipButton.disabled = completeCount === 0;
+
+    for (const item of items) {
+      const row = document.createElement("tr");
+
+      const nameCell = document.createElement("td");
+      nameCell.textContent = item.file.name;
+
+      const sizeCell = document.createElement("td");
+      sizeCell.textContent = formatBytes(item.file.size);
+
+      const statusCell = document.createElement("td");
+      statusCell.textContent = item.message || statusText(item.status);
+      statusCell.className = "status-cell " + item.status;
+
+      const actionCell = document.createElement("td");
+      if (item.status === "done") {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = "MD";
+        button.title = markdownFileName(item.file.name) + " 다운로드";
+        button.addEventListener("click", () => downloadMarkdown(item));
+        actionCell.appendChild(button);
+      } else {
+        actionCell.textContent = "-";
+      }
+
+      row.append(nameCell, sizeCell, statusCell, actionCell);
+      fileRows.appendChild(row);
+    }
+  }
+
+  function statusText(status) {
+    if (status === "ready") return "대기";
+    if (status === "working") return "변환 중";
+    if (status === "done") return "완료";
+    if (status === "failed") return "실패";
+    return status;
+  }
+
+  function addFiles(fileList) {
+    const files = Array.from(fileList).filter((file) => /\.(doc|docx|mhtml|html?)$/i.test(file.name));
+    const existingKeys = new Set(items.map((item) => item.file.name + ":" + item.file.size));
+
+    for (const file of files) {
+      const key = file.name + ":" + file.size;
+      if (!existingKeys.has(key)) {
+        items.push({ file, status: "ready", markdown: "", message: "" });
+        existingKeys.add(key);
+      }
+    }
+
+    if (!files.length) {
+      setNotice(".doc, .docx, .mhtml, .html 파일만 선택할 수 있습니다.", true);
+    } else {
+      setNotice("파일이 추가되었습니다. 변환 버튼을 누르면 Markdown으로 바뀝니다.", false);
+      setStatus("준비됨");
+    }
+
+    renderRows();
+  }
+
+  function createTurndown() {
     const service = new TurndownService({
       headingStyle: "atx",
       codeBlockStyle: "fenced",
@@ -24,17 +119,6 @@
     });
 
     return service;
-  };
-
-  function setStatus(text) {
-    statusLabel.textContent = text;
-  }
-
-  function setNotice(text, isWarning) {
-    noticeBox.textContent = text;
-    noticeBox.style.borderColor = isWarning ? "#d09b55" : "#b9d3c9";
-    noticeBox.style.background = isWarning ? "#fff4df" : "#eef8f3";
-    noticeBox.style.color = isWarning ? "#9a5b16" : "#174f44";
   }
 
   function cleanMarkdown(markdown) {
@@ -51,16 +135,46 @@
 
   function stripNoise(html) {
     const doc = new DOMParser().parseFromString(html, "text/html");
-    doc.querySelectorAll("style, script, meta, link").forEach((node) => node.remove());
-    doc.querySelectorAll("[class], [style]").forEach((node) => {
+    doc.querySelectorAll("style, script, meta, link, xml").forEach((node) => node.remove());
+    doc.querySelectorAll("[class], [style], [lang]").forEach((node) => {
       node.removeAttribute("class");
       node.removeAttribute("style");
+      node.removeAttribute("lang");
     });
-    return doc.body.innerHTML;
+    return doc.body.innerHTML || html;
   }
 
   function htmlToMarkdown(html) {
-    return cleanMarkdown(turndown().turndown(stripNoise(html)));
+    return cleanMarkdown(createTurndown().turndown(stripNoise(html)));
+  }
+
+  function detectCharset(text) {
+    const match = /charset\s*=\s*"?([^"\s;]+)/i.exec(text);
+    return match ? match[1].toLowerCase() : "utf-8";
+  }
+
+  function decodeBuffer(buffer, charset) {
+    try {
+      return new TextDecoder(charset || "utf-8").decode(buffer);
+    } catch {
+      return new TextDecoder("utf-8").decode(buffer);
+    }
+  }
+
+  function decodeQuotedPrintable(value, charset) {
+    const compact = value.replace(/=\r?\n/g, "");
+    const bytes = [];
+
+    for (let index = 0; index < compact.length; index += 1) {
+      if (compact[index] === "=" && /^[0-9a-f]{2}$/i.test(compact.slice(index + 1, index + 3))) {
+        bytes.push(parseInt(compact.slice(index + 1, index + 3), 16));
+        index += 2;
+      } else {
+        bytes.push(compact.charCodeAt(index) & 0xff);
+      }
+    }
+
+    return decodeBuffer(new Uint8Array(bytes), charset);
   }
 
   function extractHtmlFromMhtml(text) {
@@ -79,86 +193,107 @@
     const boundary = boundaryMatch ? boundaryMatch[1].trim() : null;
     const bodyEnd = boundary ? text.indexOf("\n--" + boundary, bodyStart) : -1;
     const headers = text.slice(htmlHeaderIndex, bodyStart);
-    let body = text.slice(bodyStart, bodyEnd > -1 ? bodyEnd : text.length);
+    const body = text.slice(bodyStart, bodyEnd > -1 ? bodyEnd : text.length);
+    const charset = detectCharset(headers);
 
     if (/quoted-printable/i.test(headers)) {
-      body = body
-        .replace(/=\r?\n/g, "")
-        .replace(/=([0-9A-F]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
-      try {
-        const bytes = Uint8Array.from(body, (char) => char.charCodeAt(0));
-        body = new TextDecoder("utf-8").decode(bytes);
-      } catch {
-        return body;
-      }
+      return decodeQuotedPrintable(body, charset);
     }
 
     return body;
   }
 
   async function convertFile(file) {
-    if (!window.mammoth || !window.TurndownService) {
+    if (!window.mammoth || !window.TurndownService || !window.JSZip) {
       throw new Error("변환 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 새로고침하세요.");
     }
 
     const extension = "." + file.name.split(".").pop().toLowerCase();
-    currentFileName = file.name.replace(/\.[^.]+$/, "") + ".md";
-    fileMeta.innerHTML = "<strong>" + file.name + "</strong><br>" + formatBytes(file.size);
-    setStatus("변환 중");
 
     if (extension === ".docx") {
-      const arrayBuffer = await file.arrayBuffer();
-      const result = await mammoth.convertToHtml({ arrayBuffer });
-      if (result.messages && result.messages.length) {
-        setNotice("일부 서식은 Markdown으로 단순화되었습니다.", true);
-      } else {
-        setNotice("변환이 완료되었습니다. 파일은 브라우저 밖으로 전송되지 않았습니다.", false);
-      }
+      const result = await mammoth.convertToHtml({ arrayBuffer: await file.arrayBuffer() });
       return htmlToMarkdown(result.value);
     }
 
-    if ([".html", ".htm", ".mhtml", ".doc"].includes(extension)) {
-      const text = await file.text();
-      const looksLikeMhtml = /MIME-Version:/i.test(text) && /Content-Type:\s*multipart\//i.test(text);
-      const html = looksLikeMhtml ? extractHtmlFromMhtml(text) : text;
+    const buffer = await file.arrayBuffer();
+    const latinText = decodeBuffer(buffer, "latin1");
+    const charset = detectCharset(latinText.slice(0, 8192));
+    const text = decodeBuffer(buffer, charset);
+    const looksLikeMhtml = /MIME-Version:/i.test(latinText) && /Content-Type:\s*multipart\//i.test(latinText);
+    const looksLikeHtml = /<html|<body|<!doctype html/i.test(text) || /<html|<body|<!doctype html/i.test(latinText);
 
-      if (extension === ".doc" && !/<html|<body|Content-Type:\s*text\/html/i.test(text)) {
-        throw new Error("구형 바이너리 .doc 파일은 브라우저 단독 변환을 지원하지 않습니다. Word나 LibreOffice에서 .docx로 저장한 뒤 다시 시도하세요.");
+    if (looksLikeMhtml) {
+      return htmlToMarkdown(extractHtmlFromMhtml(latinText));
+    }
+
+    if (looksLikeHtml) {
+      return htmlToMarkdown(text);
+    }
+
+    if (extension === ".doc") {
+      throw new Error("이 .doc 파일은 구형 바이너리 형식입니다. 컨플루언스 HTML 기반 .doc가 아니면 브라우저에서 직접 변환할 수 없습니다.");
+    }
+
+    throw new Error("지원하지 않는 파일 형식입니다.");
+  }
+
+  async function convertAll() {
+    if (!items.length) return;
+
+    setStatus("변환 중");
+    setNotice("파일을 순서대로 변환하고 있습니다.", false);
+    convertButton.disabled = true;
+    downloadZipButton.disabled = true;
+
+    for (const item of items) {
+      item.status = "working";
+      item.message = "";
+      renderRows();
+
+      try {
+        item.markdown = await convertFile(item.file);
+        item.status = "done";
+        item.message = "완료";
+      } catch (error) {
+        item.status = "failed";
+        item.markdown = "";
+        item.message = error.message || "변환 실패";
       }
-
-      setNotice("변환이 완료되었습니다. 파일은 브라우저 밖으로 전송되지 않았습니다.", false);
-      return htmlToMarkdown(html);
     }
 
-    throw new Error("지원하지 않는 파일 형식입니다. .docx 파일을 선택하세요.");
+    const successCount = items.filter((item) => item.status === "done").length;
+    const failedCount = items.filter((item) => item.status === "failed").length;
+    setStatus(failedCount ? "일부 실패" : "완료");
+    setNotice(`${successCount}개 변환 완료, ${failedCount}개 실패`, failedCount > 0);
+    renderRows();
   }
 
-  function formatBytes(bytes) {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-    return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  function downloadMarkdown(item) {
+    const blob = new Blob([item.markdown], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = markdownFileName(item.file.name);
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
-  async function handleFile(file) {
-    try {
-      const markdown = await convertFile(file);
-      markdownOutput.value = markdown;
-      copyButton.disabled = false;
-      downloadButton.disabled = false;
-      setStatus("완료");
-    } catch (error) {
-      markdownOutput.value = "";
-      copyButton.disabled = true;
-      downloadButton.disabled = true;
-      setStatus("실패");
-      setNotice(error.message || "변환 중 오류가 발생했습니다.", true);
+  async function downloadZip() {
+    const zip = new JSZip();
+    for (const item of items.filter((entry) => entry.status === "done")) {
+      zip.file(markdownFileName(item.file.name), item.markdown);
     }
+
+    const blob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "converted-markdown.zip";
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
-  fileInput.addEventListener("change", () => {
-    const file = fileInput.files && fileInput.files[0];
-    if (file) handleFile(file);
-  });
+  fileInput.addEventListener("change", () => addFiles(fileInput.files));
 
   ["dragenter", "dragover"].forEach((eventName) => {
     dropZone.addEventListener(eventName, (event) => {
@@ -175,32 +310,19 @@
   });
 
   dropZone.addEventListener("drop", (event) => {
-    const file = event.dataTransfer.files && event.dataTransfer.files[0];
-    if (file) handleFile(file);
+    addFiles(event.dataTransfer.files);
   });
 
-  copyButton.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(markdownOutput.value);
-    setStatus("복사됨");
-  });
-
-  downloadButton.addEventListener("click", () => {
-    const blob = new Blob([markdownOutput.value], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = currentFileName;
-    link.click();
-    URL.revokeObjectURL(url);
-  });
+  convertButton.addEventListener("click", convertAll);
+  downloadZipButton.addEventListener("click", downloadZip);
 
   clearButton.addEventListener("click", () => {
+    items = [];
     fileInput.value = "";
-    markdownOutput.value = "";
-    copyButton.disabled = true;
-    downloadButton.disabled = true;
-    fileMeta.textContent = "선택된 파일 없음";
     setStatus("대기 중");
-    setNotice("변환은 사용자의 브라우저 안에서만 실행됩니다. 파일은 서버로 업로드되지 않습니다.", false);
+    setNotice("모든 변환은 브라우저 안에서만 실행됩니다. 파일은 서버로 업로드되지 않습니다.", false);
+    renderRows();
   });
+
+  renderRows();
 })();
