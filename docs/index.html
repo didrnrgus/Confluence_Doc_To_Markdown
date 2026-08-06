@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Doc to Markdown</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js"></script>
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <section class="workspace" aria-labelledby="app-title">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Browser Converter</p>
+          <h1 id="app-title">DOCX to Markdown</h1>
+        </div>
+        <button class="icon-button" id="clearButton" type="button" title="초기화" aria-label="초기화">
+          <span aria-hidden="true">↺</span>
+        </button>
+      </header>
+
+      <div class="converter-grid">
+        <section class="panel input-panel" aria-labelledby="input-title">
+          <div class="panel-head">
+            <h2 id="input-title">문서 선택</h2>
+            <span class="status-pill" id="statusLabel">대기 중</span>
+          </div>
+
+          <label class="drop-zone" id="dropZone">
+            <input id="fileInput" type="file" accept=".docx,.doc,.mhtml,.html,.htm,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/html">
+            <span class="upload-icon" aria-hidden="true">⇪</span>
+            <strong>파일을 끌어오거나 선택하세요</strong>
+            <small>.docx, HTML/MHTML 기반 .doc 지원</small>
+          </label>
+
+          <div class="file-meta" id="fileMeta">
+            <span>선택된 파일 없음</span>
+          </div>
+
+          <div class="notice" id="noticeBox">
+            변환은 사용자의 브라우저 안에서만 실행됩니다. 파일은 서버로 업로드되지 않습니다.
+          </div>
+        </section>
+
+        <section class="panel output-panel" aria-labelledby="output-title">
+          <div class="panel-head">
+            <h2 id="output-title">Markdown 결과</h2>
+            <div class="actions">
+              <button id="copyButton" type="button" disabled>복사</button>
+              <button id="downloadButton" type="button" disabled>다운로드</button>
+            </div>
+          </div>
+          <textarea id="markdownOutput" spellcheck="false" placeholder="변환된 Markdown이 여기에 표시됩니다."></textarea>
+        </section>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
