@@ -29,10 +29,28 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish web app
+        run: dotnet publish ConfluenceDocToMarkdownWeb/ConfluenceDocToMarkdownWeb.csproj -c Release -o publish
+
+      - name: Configure base path
+        shell: bash
+        run: sed -i 's|<base href="/" />|<base href="/Confluence_Doc_To_Markdown/" />|g' publish/wwwroot/index.html
+
+      - name: Add GitHub Pages fallback
+        shell: bash
+        run: |
+          cp publish/wwwroot/index.html publish/wwwroot/404.html
+          touch publish/wwwroot/.nojekyll
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs
+          path: publish/wwwroot
 
       - name: Deploy to GitHub Pages
         id: deployment

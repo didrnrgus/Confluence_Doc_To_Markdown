@@ -1,18 +1,23 @@
 # Doc To Markdown App
 
-컨플루언스에서 내려받은 `.doc` 문서와 `.docx` 문서를 Markdown으로 변환하는 웹앱입니다. LibreOffice를 사용하는 .NET 8 콘솔 변환기도 함께 담고 있습니다.
+컨플루언스에서 내려받은 `.doc` 문서를 Markdown으로 변환하는 웹앱입니다. LibreOffice를 사용하는 .NET 8 콘솔 변환기도 함께 담고 있습니다.
 
 ## 웹앱
 
 GitHub Pages에서 정적 웹앱으로 제공합니다.
 
-- 위치: `docs/index.html`
+- 위치: `ConfluenceDocToMarkdownWeb`
 - 변환 방식: 사용자의 브라우저 안에서만 처리
-- 지원: 컨플루언스 HTML/MHTML 기반 `.doc`, `.docx`
+- 변환 엔진: 초기 콘솔 앱과 같은 `ReverseMarkdown` 4.6.0
+- 지원: 컨플루언스 HTML/MHTML 기반 `.doc`
 - 사용 흐름: 여러 파일 업로드, 변환 버튼 클릭, `.md` 파일 개별 다운로드 또는 ZIP 다운로드
-- 제한: 구형 바이너리 `.doc`는 브라우저 단독 변환이 어렵기 때문에 `.docx`로 저장한 뒤 변환해야 합니다.
+- 제한: 구형 바이너리 `.doc`는 브라우저 단독 변환이 어렵기 때문에 컨플루언스에서 HTML 기반 `.doc`로 내려받아야 합니다.
 
-로컬에서 확인하려면 `docs/index.html`을 브라우저로 열면 됩니다.
+로컬에서 확인하려면 아래 명령을 실행합니다.
+
+```powershell
+dotnet run --project .\ConfluenceDocToMarkdownWeb
+```
 
 GitHub Pages 배포는 `.github/workflows/pages.yml` 워크플로가 처리합니다.
 

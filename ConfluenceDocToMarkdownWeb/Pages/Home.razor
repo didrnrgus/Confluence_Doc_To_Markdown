@@ -1,0 +1,415 @@
+@page "/"
+@using System.IO.Compression
+@using System.Text
+@using System.Text.RegularExpressions
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using ReverseMarkdown
+@inject IJSRuntime Js
+
+<PageTitle>Confluence DOC to Markdown</PageTitle>
+
+<main class="shell">
+    <section class="workspace" aria-labelledby="app-title">
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">Confluence Export Converter</p>
+                <h1 id="app-title">Confluence DOC to Markdown</h1>
+            </div>
+            <button class="icon-button" type="button" title="초기화" aria-label="초기화" @onclick="Clear">
+                <span aria-hidden="true">↺</span>
+            </button>
+        </header>
+
+        <section class="upload-area" aria-labelledby="upload-title">
+            <div class="upload-copy">
+                <h2 id="upload-title">파일 업로드</h2>
+                <p>컨플루언스에서 내려받은 .doc 파일 여러 개를 올린 뒤 변환하세요.</p>
+            </div>
+
+            <label class="drop-zone">
+                <InputFile OnChange="AddFiles" multiple accept=".doc,.mhtml,.html,.htm" />
+                <span class="upload-icon" aria-hidden="true">⇪</span>
+                <strong>파일 선택</strong>
+                <small>.doc, .mhtml, .html</small>
+            </label>
+
+            <div class="command-row">
+                <span class="status-pill">@Status</span>
+                <button class="primary-button" type="button" disabled="@(!Items.Any() || IsWorking)" @onclick="ConvertAll">변환</button>
+                <button type="button" disabled="@(!Items.Any(x => x.Status == FileStatus.Done) || IsWorking)" @onclick="DownloadZip">ZIP 다운로드</button>
+            </div>
+
+            <div class="notice @(HasFailures ? "warning" : "")">@Notice</div>
+        </section>
+
+        <section class="result-area" aria-labelledby="result-title">
+            <div class="section-head">
+                <h2 id="result-title">변환 목록</h2>
+                <span>@Summary</span>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>파일명</th>
+                            <th>크기</th>
+                            <th>상태</th>
+                            <th>다운로드</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (!Items.Any())
+                        {
+                            <tr class="empty-row">
+                                <td colspan="4">파일을 추가하면 여기에 표시됩니다.</td>
+                            </tr>
+                        }
+                        else
+                        {
+                            @foreach (var item in Items)
+                            {
+                                <tr>
+                                    <td>@item.Name</td>
+                                    <td>@FormatBytes(item.Size)</td>
+                                    <td class="status-cell @StatusCss(item.Status)">@(item.Message ?? StatusText(item.Status))</td>
+                                    <td>
+                                        @if (item.Status == FileStatus.Done)
+                                        {
+                                            <button type="button" title="@($"{MarkdownFileName(item.Name)} 다운로드")" @onclick="() => DownloadMarkdown(item)">MD</button>
+                                        }
+                                        else
+                                        {
+                                            <span>-</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </section>
+</main>
+
+@code {
+    private const long MaxFileSize = 100 * 1024 * 1024;
+    private readonly List<UploadItem> Items = [];
+    private string Status { get; set; } = "대기 중";
+    private string Notice { get; set; } = "모든 변환은 브라우저 안에서만 실행됩니다. 파일은 서버로 업로드되지 않습니다.";
+    private bool IsWorking { get; set; }
+    private bool HasFailures => Items.Any(x => x.Status == FileStatus.Failed);
+    private string Summary => Items.Count == 0
+        ? "선택된 파일 없음"
+        : $"{Items.Count}개 선택됨, {Items.Count(x => x.Status == FileStatus.Done)}개 변환 완료";
+
+    private async Task AddFiles(InputFileChangeEventArgs args)
+    {
+        var existingKeys = Items.Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
+
+        foreach (var file in args.GetMultipleFiles())
+        {
+            if (!Regex.IsMatch(file.Name, @"\.(doc|mhtml|html?)$", RegexOptions.IgnoreCase))
+                continue;
+
+            var buffer = new byte[file.Size];
+            await using var stream = file.OpenReadStream(MaxFileSize);
+            var offset = 0;
+            while (offset < buffer.Length)
+            {
+                var read = await stream.ReadAsync(buffer.AsMemory(offset));
+                if (read == 0)
+                    break;
+                offset += read;
+            }
+
+            var item = new UploadItem(file.Name, file.Size, buffer);
+            if (existingKeys.Add(item.Key))
+                Items.Add(item);
+        }
+
+        Status = Items.Any() ? "준비됨" : "대기 중";
+        Notice = Items.Any()
+            ? "파일이 추가되었습니다. 변환 버튼을 누르면 Markdown으로 바뀝니다."
+            : ".doc, .mhtml, .html 파일만 선택할 수 있습니다.";
+    }
+
+    private async Task ConvertAll()
+    {
+        IsWorking = true;
+        Status = "변환 중";
+        Notice = "초기 콘솔 앱과 같은 ReverseMarkdown 변환 규칙으로 처리하고 있습니다.";
+
+        foreach (var item in Items)
+        {
+            item.Status = FileStatus.Working;
+            item.Message = null;
+            await InvokeAsync(StateHasChanged);
+
+            try
+            {
+                item.Markdown = ConvertConfluenceDocToMarkdown(item.Bytes);
+                item.Status = FileStatus.Done;
+                item.Message = "완료";
+            }
+            catch (Exception ex)
+            {
+                item.Markdown = "";
+                item.Status = FileStatus.Failed;
+                item.Message = ex.Message;
+            }
+        }
+
+        IsWorking = false;
+        var successCount = Items.Count(x => x.Status == FileStatus.Done);
+        var failedCount = Items.Count(x => x.Status == FileStatus.Failed);
+        Status = failedCount == 0 ? "완료" : "일부 실패";
+        Notice = $"{successCount}개 변환 완료, {failedCount}개 실패";
+    }
+
+    private static string ConvertConfluenceDocToMarkdown(byte[] bytes)
+    {
+        var content = Encoding.Latin1.GetString(bytes);
+        var html = IsMhtmlContent(content) ? ExtractHtmlFromMhtml(content) : content;
+        return ConvertHtmlToMarkdown(html);
+    }
+
+    private static bool IsMhtmlContent(string content)
+    {
+        return content.Contains("MIME-Version:", StringComparison.OrdinalIgnoreCase)
+            && content.Contains("Content-Type: multipart/", StringComparison.OrdinalIgnoreCase)
+            && content.Contains("Content-Type: text/html", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ExtractHtmlFromMhtml(string content)
+    {
+        var htmlHeaderIndex = content.IndexOf("Content-Type: text/html", StringComparison.OrdinalIgnoreCase);
+        if (htmlHeaderIndex < 0)
+            throw new InvalidOperationException("MHTML 안에서 HTML 본문을 찾지 못했습니다.");
+
+        var bodyStart = FindHeaderBodyStart(content, htmlHeaderIndex);
+        if (bodyStart < 0)
+            throw new InvalidOperationException("MHTML HTML 파트의 본문 시작 위치를 찾지 못했습니다.");
+
+        var boundary = GetMhtmlBoundary(content);
+        var bodyEnd = boundary is null
+            ? content.Length
+            : content.IndexOf("\n--" + boundary, bodyStart, StringComparison.Ordinal);
+
+        if (bodyEnd < 0)
+            bodyEnd = content.Length;
+
+        var headers = content[htmlHeaderIndex..bodyStart];
+        var body = content[bodyStart..bodyEnd];
+
+        if (headers.Contains("quoted-printable", StringComparison.OrdinalIgnoreCase))
+            return DecodeQuotedPrintable(body, Encoding.UTF8);
+
+        return body;
+    }
+
+    private static int FindHeaderBodyStart(string content, int startIndex)
+    {
+        var crlf = content.IndexOf("\r\n\r\n", startIndex, StringComparison.Ordinal);
+        if (crlf >= 0)
+            return crlf + 4;
+
+        var lf = content.IndexOf("\n\n", startIndex, StringComparison.Ordinal);
+        return lf >= 0 ? lf + 2 : -1;
+    }
+
+    private static string? GetMhtmlBoundary(string content)
+    {
+        var match = Regex.Match(
+            content,
+            @"boundary\s*=\s*""?(?<boundary>[^""\r\n;]+)",
+            RegexOptions.IgnoreCase);
+
+        return match.Success ? match.Groups["boundary"].Value.Trim() : null;
+    }
+
+    private static string DecodeQuotedPrintable(string value, Encoding encoding)
+    {
+        value = value.Replace("=\r\n", "").Replace("=\n", "");
+
+        using var output = new MemoryStream();
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (value[i] == '='
+                && i + 2 < value.Length
+                && IsHex(value[i + 1])
+                && IsHex(value[i + 2]))
+            {
+                output.WriteByte(Convert.ToByte(value.Substring(i + 1, 2), 16));
+                i += 2;
+                continue;
+            }
+
+            output.WriteByte((byte)value[i]);
+        }
+
+        return encoding.GetString(output.ToArray());
+    }
+
+    private static bool IsHex(char value)
+        => (value >= '0' && value <= '9')
+            || (value >= 'a' && value <= 'f')
+            || (value >= 'A' && value <= 'F');
+
+    private static string ConvertHtmlToMarkdown(string html)
+    {
+        html = PreCleanHtml(html);
+
+        var config = new Config
+        {
+            GithubFlavored = true,
+            RemoveComments = true,
+            SmartHrefHandling = true,
+            UnknownTags = Config.UnknownTagsOption.Drop
+        };
+
+        var converter = new Converter(config);
+        var markdown = converter.Convert(html);
+
+        return PostCleanMarkdown(markdown);
+    }
+
+    private static string PreCleanHtml(string html)
+    {
+        html = Regex.Replace(html, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
+        html = Regex.Replace(html, @"<script[\s\S]*?</script>", "", RegexOptions.IgnoreCase);
+        html = Regex.Replace(html, @"\sclass=""[^""]*""", "", RegexOptions.IgnoreCase);
+        html = Regex.Replace(html, @"\sstyle=""[^""]*""", "", RegexOptions.IgnoreCase);
+        return html;
+    }
+
+    private static string PostCleanMarkdown(string markdown)
+    {
+        markdown = markdown.Replace("\r\n", "\n");
+        markdown = markdown.Replace(@"\_", "_");
+        markdown = markdown.Replace("&nbsp;", " ");
+        markdown = Regex.Replace(markdown, @"[ \t]+\n", "\n");
+        markdown = Regex.Replace(markdown, @"\n{3,}", "\n\n");
+        markdown = Regex.Replace(markdown, @"(?m)^\s+([-*+]\s)", "$1");
+        markdown = Regex.Replace(markdown, @"(?m)^\s+(#{1,6}\s)", "$1");
+        markdown = RemoveConsecutiveDuplicateHeadings(markdown);
+        return markdown.Trim() + "\n";
+    }
+
+    private static string RemoveConsecutiveDuplicateHeadings(string markdown)
+    {
+        var lines = markdown.Split('\n');
+        var result = new List<string>(lines.Length);
+        string? previousHeading = null;
+
+        foreach (var line in lines)
+        {
+            var heading = Regex.Match(line, @"^(#{1,6})\s+(.+)$");
+            if (heading.Success)
+            {
+                var currentHeading = heading.Groups[2].Value.Trim();
+                if (string.Equals(previousHeading, currentHeading, StringComparison.Ordinal))
+                    continue;
+
+                previousHeading = currentHeading;
+            }
+            else if (!string.IsNullOrWhiteSpace(line))
+            {
+                previousHeading = null;
+            }
+
+            result.Add(line);
+        }
+
+        return string.Join('\n', result);
+    }
+
+    private async Task DownloadMarkdown(UploadItem item)
+    {
+        await Js.InvokeVoidAsync(
+            "docToMarkdown.downloadText",
+            MarkdownFileName(item.Name),
+            item.Markdown,
+            "text/markdown;charset=utf-8");
+    }
+
+    private async Task DownloadZip()
+    {
+        await using var stream = new MemoryStream();
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var item in Items.Where(x => x.Status == FileStatus.Done))
+            {
+                var entry = archive.CreateEntry(MarkdownFileName(item.Name));
+                await using var entryStream = entry.Open();
+                await using var writer = new StreamWriter(entryStream, new UTF8Encoding(false));
+                await writer.WriteAsync(item.Markdown);
+            }
+        }
+
+        await Js.InvokeVoidAsync(
+            "docToMarkdown.downloadBytes",
+            "converted-markdown.zip",
+            Convert.ToBase64String(stream.ToArray()),
+            "application/zip");
+    }
+
+    private void Clear()
+    {
+        Items.Clear();
+        Status = "대기 중";
+        Notice = "모든 변환은 브라우저 안에서만 실행됩니다. 파일은 서버로 업로드되지 않습니다.";
+    }
+
+    private static string MarkdownFileName(string name)
+        => Regex.Replace(Path.GetFileNameWithoutExtension(name), @"[\\/:*?""<>|]+", "_") + ".md";
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024)
+            return $"{bytes} B";
+
+        if (bytes < 1024 * 1024)
+            return $"{bytes / 1024d:0.0} KB";
+
+        return $"{bytes / 1024d / 1024d:0.0} MB";
+    }
+
+    private static string StatusText(FileStatus status) => status switch
+    {
+        FileStatus.Ready => "대기",
+        FileStatus.Working => "변환 중",
+        FileStatus.Done => "완료",
+        FileStatus.Failed => "실패",
+        _ => status.ToString()
+    };
+
+    private static string StatusCss(FileStatus status) => status switch
+    {
+        FileStatus.Ready => "ready",
+        FileStatus.Working => "working",
+        FileStatus.Done => "done",
+        FileStatus.Failed => "failed",
+        _ => ""
+    };
+
+    private sealed class UploadItem(string name, long size, byte[] bytes)
+    {
+        public string Name { get; } = name;
+        public long Size { get; } = size;
+        public byte[] Bytes { get; } = bytes;
+        public string Key => $"{Name}:{Size}";
+        public FileStatus Status { get; set; } = FileStatus.Ready;
+        public string? Message { get; set; }
+        public string Markdown { get; set; } = "";
+    }
+
+    private enum FileStatus
+    {
+        Ready,
+        Working,
+        Done,
+        Failed
+    }
+}
